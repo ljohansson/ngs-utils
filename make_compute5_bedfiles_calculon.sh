@@ -24,7 +24,7 @@ ${bold}Arguments${normal}
 	Optional:
 
 	-c|--coverageperbase	true or false (default: false)
-	-d|--data               What kind of data. exome (10 batches) or wgs (20 batches). (default: targeted = batchsize of 6 (3 + 2X + 1Y)
+	-d|--data               What kind of data. exome (10 batches) or wgs (20 batches) or chr (per chromosome,splitted X into 2 for par and nonpar region). (default: targeted = batchsize of 6 (3 + 2X + 1Y)
                                 in case of wgs samples there should be no padding (this will automatically skipped when wgs is chosen)
 	-e|--extension		extension to the bed file (default: human_g1k_v37)
 	-o|--intervalfolder	path to intervalfolder (default: this folder)
@@ -109,7 +109,17 @@ if [[ -z "${DATA-}" ]]; then
         DATA="targeted"
 fi
 if [[ -z "${TMP-}" ]]; then
-       	TMP="/groups/umcg-gaf/tmp04/tmp"
+	whichHost=$(hostname)
+	if [ "$whichHost" == "zinc-finger.gcc.rug.nl" ]
+	then
+		 TMP="/groups/umcg-gaf/tmp05/tmp"
+	elif [ "$whichHost" == "calculon" ]
+	then
+		TMP="/groups/umcg-gaf/tmp04/tmp"
+	else
+		echo "unknown host!"
+		exit 1
+	fi
 fi
 
 BATCHCOUNT=3
@@ -121,9 +131,18 @@ batchCount_X=2
 if [ $DATA == "wgs" ]
 then
         BATCHCOUNT=17
+	echo "BATCHCOUNT: $((BATCHCOUNT + 1 + batchCount_X))"
 elif [ $DATA == "exome" ]
 then
         BATCHCOUNT=7
+	echo "BATCHCOUNT: $((BATCHCOUNT + 1 + batchCount_X))"
+elif [ $DATA == "chr" ]
+then
+	awk '{print $1}' ${NAME}.bed | sort | uniq > countChr.tmp
+	BATCHCOUNT=$(cat countChr.tmp | wc -l)
+	echo "BATCHCOUNT: $BATCHCOUNT"
+else
+	echo "BATCHCOUNT: $((BATCHCOUNT + 1 + batchCount_X))"
 fi
 
 echo "NAME: $NAME"
@@ -131,6 +150,7 @@ echo "INTERVALSFOLDER: $INTERVALFOLDER"
 echo "EXTENSION: $EXTENSION"
 echo "REFERENCE: $REFERENCE"
 echo "COVPERBASE: $COVPERBASE"
+
 echo "BATCHCOUNT: $((BATCHCOUNT + 1 + batchCount_X))"
 
 MAP="${INTERVALFOLDER}"
@@ -145,9 +165,11 @@ cp /apps/data/1000G/phase1/Mills_and_1000G_gold_standard/1000G_phase1.indels_Mil
 
 baits=${MAP}/${NAME}
 
+sort -V ${baits}.bed > ${baits}.bed.sorted
+mv ${baits}.bed.sorted ${baits}.bed
+
 ## If there are 4 columns, it adds an extra column (this is necessary for the GATK batch tool
 colcount=`awk '{print NF}' ${baits}.bed | sort | tail -n 1`
-
 
 #check for the presence of phiX region
 if [ -f ${baits}.bed ]
@@ -202,13 +224,22 @@ then
 fi
 
 module load ngs-utils
+module load BEDTools
+bedtools merge -i ${baits}.bed -c 4,5 -o distinct > ${baits}.merged.bed
+
+if [ ! -f ${baits}.genesOnly ]
+then
+	awk '{print $5}' ${baits}.merged.bed > ${baits}.genesOnly
+fi
+
 
 if [ $COVPERBASE == "true" ]
 then
 	if [ ! -f ${baits}.uniq.per_base.bed ]
 	then
 		echo "starting to create_per_base_intervals, this may take a while"
-		create_per_base_intervals.pl -input ${baits}.bed -output ${NAME} -outputfolder $TMP
+
+		create_per_base_bed.pl -input ${baits}.bed -output ${NAME} -outputfolder $TMP
 
 		sort -V -k1 -k2 -k3 ${TMP}/${NAME}.per_base.bed | uniq -u > ${baits}.uniq.per_base.bed
 		rm ${TMP}/${NAME}.per_base.bed
@@ -221,63 +252,117 @@ then
 	#make interval_list coverage per base
 	cat ${phiXRef} > ${baits}.uniq.per_base.interval_list
 	cat ${baits}.uniq.per_base.bed >> ${baits}.uniq.per_base.interval_list 
-	awk '{
-	if ($0 !~ /^@/){
-		minus=($2 + 1);
-		print $1"\t"minus"\t"$3"\t"$4"\t"$5
+
+	echo "${baits}.uniq.per_base.interval_list created"
+
+	awk '{ if ($0 !~ /^@/){
+		minus=($3 -1)
+		print $1"\t"$2"\t"minus"\t"$4"\t"$5
 	}
-	else
+	else{
 		print $0
-	}' ${baits}.uniq.per_base.interval_list > ${baits}.uniq.per_base.interval_list.tmp
+	}}' ${baits}.uniq.per_base.interval_list > ${baits}.uniq.per_base.interval_list.tmp
+
 	mv ${baits}.uniq.per_base.interval_list.tmp ${baits}.uniq.per_base.interval_list
 
 fi
 
-if [ -f ${baits}.batch-1.bed ]
+if [ "${DATA}" == "chr" ]
 then
-        echo "Is this bed file already splitted before? If so, please remove the old ones or do not run this script ;)"
-else
-	module load picard/1.130-Java-1.7.0_80
 
-	batchIntervallistDir=${MAP}
-
-	chrXNONPARInterval=${baits}.chrX.nonpar.interval_list
-	chrXPARBed=${baits}.chrX.par.bed
-	AllWithoutchrXInterval=${baits}.withoutChrX.interval_list
-
-	cat ${phiXRef} > ${AllWithoutchrXInterval}
-	cat ${phiXRef} > ${chrXNONPARInterval}
-
-	cat ${baits}.withoutChrX.bed >> ${AllWithoutchrXInterval}
-
-	awk '{
-		if ($1 == "X"){
-	       		if (($2 >= 60001  && $3 <= 2699520 ) || ($2 >= 154931044 && $3 <= 155260560 )){
-        	                print $0 >> "'${chrXPARBed}'"
-        		} else {
-        		        print $0 >> "'${chrXNONPARInterval}'"
-        		}
-		}
-	}' ${baits}.bed
-
-	if [ -f ${chrXPARBed} ]
+	if [ -f ${baits}.batch-1.bed ]
 	then
-	        cat ${chrXPARBed} >> ${AllWithoutchrXInterval}
+    		echo "Is this bed file already splitted before? If so, please remove the old ones or do not run this script ;)"
+	else
+    		batchIntervallistDir=${MAP}
+
+        	chrXNONPARBed=${baits}.batch-Xnp.bed
+        	chrXPARBed=${baits}.batch-Xp.bed
+
+		##Lastline is always phiX, we want to know whi
+		LASTLINE=$(tail -n1 ${baits}.bed)
+		ONEBEFORELASTLINE=$(tail -n2 ${baits}.bed | head -1)
+		OLDIFS=$IFS
+		set $ONEBEFORELASTLINE
+		chromo=$1
+		position=$2
+
+        	awk '{
+        	      	if ($1 == "X"){
+				if (($2 == 1) && ($3 == 155270560)){
+					print "X\t60001\t2699520\t+\tWGS" > "'${chrXPARBed}'" 
+					print "X\t154931044\t155260560\t+\tWGS" > "'${chrXPARBed}'" 
+					print "X\t1\t60000\t+\tWGS" > "'${chrXNONPARBed}'"
+					print "X\t2699521\t154931043\t+\tWGS" >> "'${chrXNONPARBed}'"
+				}	
+               	        	else if (($2 >= 60001  && $3 <= 2699520 ) || ($2 >= 154931044 && $3 <= 155260560 )){
+                                	print $0 >> "'${chrXPARBed}'"
+                        	} else {
+	                        	print $0 >> "'${chrXNONPARBed}'"
+                        	}
+                	}else if ($1 == "NC_001422.1"){
+				#do nothing, will added later
+			}
+			else{
+                	      	print $0 >> "captured.batch-"$1".bed"
+                	}
+        	}' ${baits}.bed
+	### Check where to put the phiXref	
+	if [ "${chromo}" == "X" ]
+	then
+		if [[ ${position} -gt 60001 && ${position} -lt 2699520 ]] || [[ $position -gt 154931044 && $position -lt 155260560 ]]
+		then
+			echo $LASTLINE >> captured.batch-Xp.bed
+		else
+			echo $LASTLINE >> captured.batch-Xnp.bed
+		fi 
+	else
+		echo $LASTLINE >> captured.batch-${chromo}.bed
 	fi
-
-	awk '{
-	if ($0 !~ /^@/){
-                minus=($2 + 1);
-                print $1"\t"minus"\t"$3"\t"$4"\t"$5
-        }
-        else
-                print $0
-        }' ${AllWithoutchrXInterval} > ${AllWithoutchrXInterval}.tmp
-	mv ${AllWithoutchrXInterval}.tmp ${AllWithoutchrXInterval}
-
-##IF WGS NO PADDING!!! ####
-	if [ $DATA == "wgs" ]
+fi
+else
+	if [ -f ${baits}.batch-1.bed ]
 	then
+	        echo "Is this bed file already splitted before? If so, please remove the old ones or do not run this script ;)"
+	else
+		module load picard/1.130-Java-1.7.0_80
+
+		batchIntervallistDir=${MAP}
+
+		chrXNONPARInterval=${baits}.chrX.nonpar.interval_list
+		chrXPARBed=${baits}.chrX.par.bed
+		AllWithoutchrXInterval=${baits}.withoutChrX.interval_list
+	
+		cat ${phiXRef} > ${AllWithoutchrXInterval}	
+		cat ${phiXRef} > ${chrXNONPARInterval}
+
+		cat ${baits}.withoutChrX.bed >> ${AllWithoutchrXInterval}
+
+		awk '{
+			if ($1 == "X"){
+		       		if (($2 >= 60001  && $3 <= 2699520 ) || ($2 >= 154931044 && $3 <= 155260560 )){
+	        	                print $0 >> "'${chrXPARBed}'"
+	        		} else {
+	        		        print $0 >> "'${chrXNONPARInterval}'"
+	        		}
+			}
+		}' ${baits}.bed
+
+		if [ -f ${chrXPARBed} ]
+		then
+		        cat ${chrXPARBed} >> ${AllWithoutchrXInterval}
+		fi
+
+		awk '{
+		if ($0 !~ /^@/){
+        	        minus=($2 + 1);
+        	        print $1"\t"minus"\t"$3"\t"$4"\t"$5
+        	}
+        	else
+        	        print $0
+        	}' ${AllWithoutchrXInterval} > ${AllWithoutchrXInterval}.tmp
+		mv ${AllWithoutchrXInterval}.tmp ${AllWithoutchrXInterval}
+
 	#autosomal
 	java -jar -Xmx4g -XX:ParallelGCThreads=4 ${EBROOTPICARD}/picard.jar IntervalListTools \
 	INPUT=${AllWithoutchrXInterval} \
@@ -315,49 +400,6 @@ else
                         tail -n+${lengthRef} ${ba}.interval_list > ${ba}.bed
 		fi
 	done
-
-### NO WGS ###
-	else
-        #autosomal
-        java -jar -Xmx4g -XX:ParallelGCThreads=4 ${EBROOTPICARD}/picard.jar IntervalListTools \
-        INPUT=${AllWithoutchrXInterval} \
-        OUTPUT=${batchIntervallistDir} \
-        PADDING=150 \
-        UNIQUE=true \
-        SCATTER_COUNT=${BATCHCOUNT}
-
-        echo "AUTOSOMAL DONE"
-        #non PAR region
-        java -jar -Xmx4g -XX:ParallelGCThreads=4 ${EBROOTPICARD}/picard.jar IntervalListTools \
-        INPUT=${chrXNONPARInterval} \
-        OUTPUT=${batchIntervallistDir} \
-        PADDING=150 \
-        UNIQUE=true \
-        SCATTER_COUNT=${batchCount_X} \
-
-        echo "PAR DONE"
-        BATCH_ALL=$((BATCHCOUNT + batchCount_X))
-        #move the X chromosome folders
-        lengthR=`less ${phiXRef} | wc -l`
-        echo "lengthR: $lengthR"
-        lengthRef=$(( ${lengthR} + 2 ))
-        for i in $(seq 1 ${batchCount_X})
-        do
-                bi=$(( BATCHCOUNT + i  ))
-                ba=${baits}.batch-${bi}X
-                echo "ba=$ba bi=$bi"
-                if [[ ${i} -lt 10 ]]
-                then
-                        echo "$i is minder dan 10"
-                        mv  ${batchIntervallistDir}/temp_000${i}_of_${batchCount_X}/scattered.intervals  ${ba}.interval_list
-                        tail -n+${lengthRef} ${ba}.interval_list > ${ba}.bed
-                else
-                        echo "$i is meer dan 10"
-                        mv  ${batchIntervallistDir}/temp_00${i}_of_${batchCount_X}/scattered.intervals  ${ba}.interval_list
-                        tail -n+${lengthRef} ${ba}.interval_list > ${ba}.bed
-                fi
-        done
-	fi
 
 	BATCH_Y=$((BATCH_ALL + 1))
 
@@ -423,9 +465,11 @@ else
 	echo "batching complete"
 	rm -rf ${batchIntervallistDir}/temp_0*
 fi
+
+fi #end of if/else loop chr
 if [ ! -f ${MAP}/captured.femaleY.bed ]
 then
-	echo -e 'Y\t1\t2\t+' > ${MAP}/captured.femaleY.bed
+	echo -e 'Y\t1\t2\t+\tFake' > ${MAP}/captured.femaleY.bed
 fi
 
 #for f in ${MAP}/*_baits_*; do cp $f ${f/_baits_/_exons_}; done
