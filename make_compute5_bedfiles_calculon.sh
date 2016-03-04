@@ -151,8 +151,11 @@ echo "EXTENSION: $EXTENSION"
 echo "REFERENCE: $REFERENCE"
 echo "COVPERBASE: $COVPERBASE"
 
+<<<<<<< HEAD
 echo "BATCHCOUNT: $((BATCHCOUNT + 1 + batchCount_X))"
 
+=======
+>>>>>>> 7f0278ca8d141ae3808684e8ed9e9837d7a66ebd
 MAP="${INTERVALFOLDER}"
 
 if [[ ${NAME} == *"baits"*  ]] || [[ ${NAME} == *"v37"* ]] || [[ ${NAME} == *"exons"* ]] || [[ ${NAME} == *".bed"* ]]
@@ -180,7 +183,10 @@ else
 fi
 cat ${baits}.bed > ${baits}.bed.tmp
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 7f0278ca8d141ae3808684e8ed9e9837d7a66ebd
 if [ $a == 0 ]
 then
 	if [ "$colcount" == "4" ]
@@ -238,7 +244,10 @@ then
 	if [ ! -f ${baits}.uniq.per_base.bed ]
 	then
 		echo "starting to create_per_base_intervals, this may take a while"
+<<<<<<< HEAD
 
+=======
+>>>>>>> 7f0278ca8d141ae3808684e8ed9e9837d7a66ebd
 		create_per_base_bed.pl -input ${baits}.bed -output ${NAME} -outputfolder $TMP
 
 		sort -V -k1 -k2 -k3 ${TMP}/${NAME}.per_base.bed | uniq -u > ${baits}.uniq.per_base.bed
@@ -252,7 +261,10 @@ then
 	#make interval_list coverage per base
 	cat ${phiXRef} > ${baits}.uniq.per_base.interval_list
 	cat ${baits}.uniq.per_base.bed >> ${baits}.uniq.per_base.interval_list 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 7f0278ca8d141ae3808684e8ed9e9837d7a66ebd
 	echo "${baits}.uniq.per_base.interval_list created"
 
 	awk '{ if ($0 !~ /^@/){
@@ -465,6 +477,7 @@ else
 	echo "batching complete"
 	rm -rf ${batchIntervallistDir}/temp_0*
 fi
+
 
 fi #end of if/else loop chr
 if [ ! -f ${MAP}/captured.femaleY.bed ]
